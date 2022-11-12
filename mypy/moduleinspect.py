@@ -69,17 +69,20 @@ def get_package_properties(package_id: str) -> ModuleProperties:
             # This is a C extension module, now get the list of all sub-packages
             # using the inspect module
             subpackages = [
-                package.__name__ + "." + name
+                f"{package.__name__}.{name}"
                 for name, val in inspect.getmembers(package)
-                if inspect.ismodule(val) and val.__name__ == package.__name__ + "." + name
+                if inspect.ismodule(val)
+                and val.__name__ == f"{package.__name__}.{name}"
             ]
+
         else:
             # It's a module inside a package.  There's nothing else to walk/yield.
             subpackages = []
     else:
         all_packages = pkgutil.walk_packages(
-            path, prefix=package.__name__ + ".", onerror=lambda r: None
+            path, prefix=f"{package.__name__}.", onerror=lambda r: None
         )
+
         subpackages = [qualified_name for importer, qualified_name, ispkg in all_packages]
     return ModuleProperties(
         name=name, file=file, path=path, all=pkg_all, is_c_module=is_c, subpackages=subpackages

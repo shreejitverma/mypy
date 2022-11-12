@@ -57,10 +57,14 @@ def keyfunc(name: str) -> tuple[bool, int, str]:
     2) __init__.py[i] < foo
     """
     base, suffix = os.path.splitext(name)
-    for i, ext in enumerate(PY_EXTENSIONS):
-        if suffix == ext:
-            return (base != "__init__", i, base)
-    return (base != "__init__", -1, name)
+    return next(
+        (
+            (base != "__init__", i, base)
+            for i, ext in enumerate(PY_EXTENSIONS)
+            if suffix == ext
+        ),
+        (base != "__init__", -1, name),
+    )
 
 
 def normalise_package_base(root: str) -> str:
@@ -115,8 +119,7 @@ class SourceFinder:
                 continue
 
             if self.fscache.isdir(subpath):
-                sub_sources = self.find_sources_in_dir(subpath)
-                if sub_sources:
+                if sub_sources := self.find_sources_in_dir(subpath):
                     seen.add(name)
                     sources.extend(sub_sources)
             else:
@@ -218,7 +221,7 @@ class SourceFinder:
         This prefers .pyi over .py (because of the ordering of PY_EXTENSIONS).
         """
         for ext in PY_EXTENSIONS:
-            f = os.path.join(dir, "__init__" + ext)
+            f = os.path.join(dir, f"__init__{ext}")
             if self.fscache.isfile(f):
                 return f
             if ext == ".py" and self.fscache.init_under_package_root(f):
@@ -228,9 +231,7 @@ class SourceFinder:
 
 def module_join(parent: str, child: str) -> str:
     """Join module ids, accounting for a possibly empty parent."""
-    if parent:
-        return parent + "." + child
-    return child
+    return f"{parent}.{child}" if parent else child
 
 
 def strip_py(arg: str) -> str | None:
@@ -238,7 +239,6 @@ def strip_py(arg: str) -> str | None:
 
     Return None if no such suffix is found.
     """
-    for ext in PY_EXTENSIONS:
-        if arg.endswith(ext):
-            return arg[: -len(ext)]
-    return None
+    return next(
+        (arg[: -len(ext)] for ext in PY_EXTENSIONS if arg.endswith(ext)), None
+    )

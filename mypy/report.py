@@ -67,13 +67,10 @@ class Reports:
         reporter_cls, needs_lxml = reporter_classes[report_type]
         if needs_lxml and not LXML_INSTALLED:
             print(
-                (
-                    "You must install the lxml package before you can run mypy"
-                    " with `--{}-report`.\n"
-                    "You can do this with `python3 -m pip install lxml`."
-                ).format(report_type),
+                f"You must install the lxml package before you can run mypy with `--{report_type}-report`.\nYou can do this with `python3 -m pip install lxml`.",
                 file=sys.stderr,
             )
+
             raise ImportError
         reporter = reporter_cls(self, report_dir)
         self.reporters.append(reporter)
@@ -133,9 +130,7 @@ def should_skip_path(path: str) -> bool:
         return True
     if path.startswith(".."):
         return True
-    if "stubs" in path.split("/") or "stubs" in path.split(os.sep):
-        return True
-    return False
+    return "stubs" in path.split("/") or "stubs" in path.split(os.sep)
 
 
 def iterate_python_lines(path: str) -> Iterator[tuple[int, str]]:
@@ -296,9 +291,11 @@ class AnyExpressionsReporter(AbstractReporter):
         file_column_name = "Name"
         total_row_name = "Total"
         column_names = [file_column_name] + list(type_of_any_name_map.values())
-        rows: list[list[str]] = []
-        for filename, counter in self.any_types_counter.items():
-            rows.append([filename] + [str(counter[typ]) for typ in type_of_any_name_map])
+        rows: list[list[str]] = [
+            [filename] + [str(counter[typ]) for typ in type_of_any_name_map]
+            for filename, counter in self.any_types_counter.items()
+        ]
+
         rows.sort(key=lambda x: x[0])
         total_row = [total_row_name] + [str(total_counter[typ]) for typ in type_of_any_name_map]
         self._write_out_report("types-of-anys.txt", column_names, rows, total_row)
@@ -316,7 +313,7 @@ class LineCoverageVisitor(TraverserVisitor):
         #    (-1 if not inside a function), and
         #  * whether the surrounding function is typed.
         # Initially, everything is covered at indentation level -1.
-        self.lines_covered = [(-1, True) for l in source]
+        self.lines_covered = [(-1, True) for _ in source]
 
     # The Python AST has position information for the starts of
     # elements, but not for their ends. Fortunately the
@@ -336,15 +333,11 @@ class LineCoverageVisitor(TraverserVisitor):
         for char in list(line):
             if char == " ":
                 indent += 1
-            elif char == "\t":
-                indent = 8 * ((indent + 8) // 8)
-            elif char == "#":
+            elif char in ["#", "\n"]:
                 # Line is a comment; ignore it
                 return None
-            elif char == "\n":
-                # Line is entirely whitespace; ignore it
-                return None
-            # TODO line continuation (\)
+            elif char == "\t":
+                indent = 8 * ((indent + 8) // 8)
             else:
                 # Found a non-whitespace character
                 return indent
@@ -425,10 +418,13 @@ class LineCoverageReporter(AbstractReporter):
         coverage_visitor = LineCoverageVisitor(tree_source)
         tree.accept(coverage_visitor)
 
-        covered_lines = []
-        for line_number, (_, typed) in enumerate(coverage_visitor.lines_covered):
-            if typed:
-                covered_lines.append(line_number + 1)
+        covered_lines = [
+            line_number + 1
+            for line_number, (_, typed) in enumerate(
+                coverage_visitor.lines_covered
+            )
+            if typed
+        ]
 
         self.lines_covered[os.path.abspath(tree.path)] = covered_lines
 
@@ -529,16 +525,15 @@ class MemoryXmlReporter(AbstractReporter):
 
     @staticmethod
     def _get_any_info_for_line(visitor: stats.StatisticsVisitor, lineno: int) -> str:
-        if lineno in visitor.any_line_map:
-            result = "Any Types on this line: "
-            counter: collections.Counter[int] = collections.Counter()
-            for typ in visitor.any_line_map[lineno]:
-                counter[typ.type_of_any] += 1
-            for any_type, occurrences in counter.items():
-                result += f"\n{type_of_any_name_map[any_type]} (x{occurrences})"
-            return result
-        else:
+        if lineno not in visitor.any_line_map:
             return "No Anys on this line!"
+        result = "Any Types on this line: "
+        counter: collections.Counter[int] = collections.Counter()
+        for typ in visitor.any_line_map[lineno]:
+            counter[typ.type_of_any] += 1
+        for any_type, occurrences in counter.items():
+            result += f"\n{type_of_any_name_map[any_type]} (x{occurrences})"
+        return result
 
     def on_finish(self) -> None:
         self.last_xml = None
@@ -571,10 +566,7 @@ register_reporter("memory-xml", MemoryXmlReporter, needs_lxml=True)
 
 
 def get_line_rate(covered_lines: int, total_lines: int) -> str:
-    if total_lines == 0:
-        return str(1.0)
-    else:
-        return f"{covered_lines / total_lines:.4f}"
+    return str(1.0) if total_lines == 0 else f"{covered_lines / total_lines:.4f}"
 
 
 class CoberturaPackage:
@@ -731,7 +723,7 @@ class XmlReporter(AbstractXmlReporter):
         path = os.path.relpath(tree.path)
         if path.startswith(".."):
             return
-        out_path = os.path.join(self.output_dir, "xml", path + ".xml")
+        out_path = os.path.join(self.output_dir, "xml", f"{path}.xml")
         stats.ensure_dir_exists(os.path.dirname(out_path))
         last_xml.write(out_path, encoding="utf-8")
 
@@ -776,7 +768,7 @@ class XsltHtmlReporter(AbstractXmlReporter):
         path = os.path.relpath(tree.path)
         if path.startswith(".."):
             return
-        out_path = os.path.join(self.output_dir, "html", path + ".html")
+        out_path = os.path.join(self.output_dir, "html", f"{path}.html")
         stats.ensure_dir_exists(os.path.dirname(out_path))
         transformed_html = bytes(self.xslt_html(last_xml, ext=self.param_html))
         with open(out_path, "wb") as out_file:

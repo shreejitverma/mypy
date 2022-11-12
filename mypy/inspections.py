@@ -47,10 +47,11 @@ def node_starts_after(o: Node, line: int, column: int) -> bool:
 def node_ends_before(o: Node, line: int, column: int) -> bool:
     # Unfortunately, end positions for some statements are a mess,
     # e.g. overloaded functions, so we return False when we don't know.
-    if o.end_line is not None and o.end_column is not None:
-        if o.end_line < line or o.end_line == line and o.end_column < column:
-            return True
-    return False
+    return (
+        o.end_line is not None
+        and o.end_column is not None
+        and (o.end_line < line or o.end_line == line and o.end_column < column)
+    )
 
 
 def expr_span(expr: Expression) -> str:
@@ -87,9 +88,7 @@ def get_instance_fallback(typ: ProperType) -> list[Instance]:
 
 def find_node(name: str, info: TypeInfo) -> Var | FuncBase | None:
     """Find the node defining member 'name' in given TypeInfo."""
-    # TODO: this code shares some logic with checkmember.py
-    method = info.get_method(name)
-    if method:
+    if method := info.get_method(name):
         if isinstance(method, Decorator):
             return method.var
         if method.is_property:
@@ -146,9 +145,8 @@ class SearchVisitor(ExtendedTraverserVisitor):
             and o.end_line == self.end_line
             and o.column == self.column
             and o.end_column == self.end_column
-        ):
-            if isinstance(o, Expression):
-                self.result = o
+        ) and isinstance(o, Expression):
+            self.result = o
         return self.result is None
 
 
@@ -269,9 +267,7 @@ class InspectionEngine:
         def cmp_types(x: TypeInfo, y: TypeInfo) -> int:
             if x in y.mro:
                 return 1
-            if y in x.mro:
-                return -1
-            return 0
+            return -1 if y in x.mro else 0
 
         # First gather all attributes for every union variant.
         assert instances
@@ -361,8 +357,10 @@ class InspectionEngine:
         # We don't use JSON dump to be sure keys order is always preserved.
         base_attrs = []
         if mod_dict:
-            for mod in mod_dict:
-                base_attrs.append(f'{mod}: [{", ".join(mod_dict[mod])}]')
+            base_attrs.extend(
+                f'{mod}: [{", ".join(value)}]' for mod, value in mod_dict.items()
+            )
+
         self._fill_from_dict(base_attrs, class_dict)
         self._fill_from_dict(base_attrs, attrs_dict)
         return self.add_prefixes(f'{{{", ".join(base_attrs)}}}', expression), True
@@ -378,35 +376,33 @@ class InspectionEngine:
         node: FuncBase | SymbolNode | None = expression.node
         nodes: list[FuncBase | SymbolNode]
         if node is None:
-            # Tricky case: instance attribute
-            if isinstance(expression, MemberExpr) and expression.kind is None:
-                base_type = self.fg_manager.manager.all_types.get(expression.expr)
-                if base_type is None:
-                    return []
-
-                # Now we use the base type to figure out where the attribute is defined.
-                base_type = get_proper_type(base_type)
-                instances = get_instance_fallback(base_type)
-                nodes = []
-                for instance in instances:
-                    node = find_node(expression.name, instance.type)
-                    if node:
-                        nodes.append(node)
-                if not nodes:
-                    # Try checking class namespace if attribute is on a class object.
-                    if isinstance(base_type, FunctionLike) and base_type.is_type_obj():
-                        instances = get_instance_fallback(
-                            fill_typevars_with_any(base_type.type_object())
-                        )
-                        for instance in instances:
-                            node = find_node(expression.name, instance.type)
-                            if node:
-                                nodes.append(node)
-                    else:
-                        # Still no luck, give up.
-                        return []
-            else:
+            if (
+                not isinstance(expression, MemberExpr)
+                or expression.kind is not None
+            ):
                 return []
+            base_type = self.fg_manager.manager.all_types.get(expression.expr)
+            if base_type is None:
+                return []
+
+            # Now we use the base type to figure out where the attribute is defined.
+            base_type = get_proper_type(base_type)
+            instances = get_instance_fallback(base_type)
+            nodes = []
+            for instance in instances:
+                if node := find_node(expression.name, instance.type):
+                    nodes.append(node)
+            if not nodes:
+                if isinstance(base_type, FunctionLike) and base_type.is_type_obj():
+                    instances = get_instance_fallback(
+                        fill_typevars_with_any(base_type.type_object())
+                    )
+                    for instance in instances:
+                        if node := find_node(expression.name, instance.type):
+                            nodes.append(node)
+                else:
+                    # Still no luck, give up.
+                    return []
         else:
             # Easy case: a module-level definition
             nodes = [node]
@@ -458,19 +454,15 @@ class InspectionEngine:
             modules, reload_needed = self.modules_for_nodes(nodes, expression)
             assert not reload_needed
 
-        result = []
-        for node in modules:
-            result.append(self.format_node(modules[node], node))
-
-        if not result:
-            return self.missing_node(expression), False
-
-        return self.add_prefixes(", ".join(result), expression), True
+        result = [self.format_node(modules[node], node) for node in modules]
+        return (
+            (self.add_prefixes(", ".join(result), expression), True)
+            if result
+            else (self.missing_node(expression), False)
+        )
 
     def missing_type(self, expression: Expression) -> str:
-        alt_suggestion = ""
-        if not self.force_reload:
-            alt_suggestion = " or try --force-reload"
+        alt_suggestion = "" if self.force_reload else " or try --force-reload"
         return (
             f'No known type available for "{type(expression).__name__}"'
             f" (maybe unreachable{alt_suggestion})"
@@ -488,10 +480,7 @@ class InspectionEngine:
             prefixes.append(f"{type(expression).__name__}")
         if self.include_span:
             prefixes.append(expr_span(expression))
-        if prefixes:
-            prefix = ":".join(prefixes) + " -> "
-        else:
-            prefix = ""
+        prefix = ":".join(prefixes) + " -> " if prefixes else ""
         return prefix + result
 
     def run_inspection_by_exact_location(
@@ -562,7 +551,7 @@ class InspectionEngine:
         try:
             module, _ = self.finder.crawl_up(os.path.normpath(file))
         except InvalidSourceList:
-            return None, {"error": "Invalid source file name: " + file}
+            return None, {"error": f"Invalid source file name: {file}"}
 
         state = self.fg_manager.graph.get(module)
         self.module = state

@@ -47,7 +47,7 @@ def execute(command: list[str]) -> None:
 
 def trial(num_trials: int, command: Command) -> list[float]:
     trials = []
-    for i in range(num_trials):
+    for _ in range(num_trials):
         command.setup()
         start = time.time()
         command.command()

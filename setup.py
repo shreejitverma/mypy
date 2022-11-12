@@ -142,8 +142,7 @@ if USE_MYPYC:
     # order. Sort them so that the mypyc output is deterministic.
     mypyc_targets.sort()
 
-    use_other_mypyc = os.getenv("ALTERNATE_MYPYC_PATH", None)
-    if use_other_mypyc:
+    if use_other_mypyc := os.getenv("ALTERNATE_MYPYC_PATH", None):
         # This bit is super unfortunate: we want to use a different
         # mypy/mypyc version, but we've already imported parts, so we
         # remove the modules that we've imported already, which will

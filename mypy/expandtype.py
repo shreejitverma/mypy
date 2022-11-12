@@ -70,29 +70,28 @@ def expand_type_by_instance(typ: Type, instance: Instance) -> Type:
     Type variables are considered to be bound by the class declaration."""
     if not instance.args:
         return typ
+    variables: dict[TypeVarId, Type] = {}
+    if instance.type.has_type_var_tuple_type:
+        assert instance.type.type_var_tuple_prefix is not None
+        assert instance.type.type_var_tuple_suffix is not None
+
+        args_prefix, args_middle, args_suffix = split_with_instance(instance)
+        tvars_prefix, tvars_middle, tvars_suffix = split_with_prefix_and_suffix(
+            tuple(instance.type.defn.type_vars),
+            instance.type.type_var_tuple_prefix,
+            instance.type.type_var_tuple_suffix,
+        )
+        variables = {tvars_middle[0].id: TypeList(list(args_middle))}
+        instance_args = args_prefix + args_suffix
+        tvars = tvars_prefix + tvars_suffix
     else:
-        variables: dict[TypeVarId, Type] = {}
-        if instance.type.has_type_var_tuple_type:
-            assert instance.type.type_var_tuple_prefix is not None
-            assert instance.type.type_var_tuple_suffix is not None
+        tvars = tuple(instance.type.defn.type_vars)
+        instance_args = instance.args
 
-            args_prefix, args_middle, args_suffix = split_with_instance(instance)
-            tvars_prefix, tvars_middle, tvars_suffix = split_with_prefix_and_suffix(
-                tuple(instance.type.defn.type_vars),
-                instance.type.type_var_tuple_prefix,
-                instance.type.type_var_tuple_suffix,
-            )
-            variables = {tvars_middle[0].id: TypeList(list(args_middle))}
-            instance_args = args_prefix + args_suffix
-            tvars = tvars_prefix + tvars_suffix
-        else:
-            tvars = tuple(instance.type.defn.type_vars)
-            instance_args = instance.args
+    for binder, arg in zip(tvars, instance_args):
+        variables[binder.id] = arg
 
-        for binder, arg in zip(tvars, instance_args):
-            variables[binder.id] = arg
-
-        return expand_type(typ, variables)
+    return expand_type(typ, variables)
 
 
 F = TypeVar("F", bound=FunctionLike)
@@ -153,10 +152,7 @@ class ExpandTypeVisitor(TypeVisitor[Type]):
 
     def visit_instance(self, t: Instance) -> Type:
         args = self.expand_types_with_unpack(list(t.args))
-        if isinstance(args, list):
-            return t.copy_modified(args=args)
-        else:
-            return args
+        return t.copy_modified(args=args) if isinstance(args, list) else args
 
     def visit_type_var(self, t: TypeVarType) -> Type:
         repl = self.variables.get(t.id, t)
@@ -181,23 +177,21 @@ class ExpandTypeVisitor(TypeVisitor[Type]):
                     arg_names=t.prefix.arg_names + repl.prefix.arg_names,
                 ),
             )
-        elif isinstance(repl, Parameters) or isinstance(repl, CallableType):
-            # if the paramspec is *P.args or **P.kwargs:
-            if t.flavor != ParamSpecFlavor.BARE:
-                assert isinstance(repl, CallableType), "Should not be able to get here."
-                # Is this always the right thing to do?
-                param_spec = repl.param_spec()
-                if param_spec:
-                    return param_spec.with_flavor(t.flavor)
-                else:
-                    return repl
-            else:
+        elif isinstance(repl, (Parameters, CallableType)):
+            if t.flavor == ParamSpecFlavor.BARE:
                 return Parameters(
                     t.prefix.arg_types + repl.arg_types,
                     t.prefix.arg_kinds + repl.arg_kinds,
                     t.prefix.arg_names + repl.arg_names,
                     variables=[*t.prefix.variables, *repl.variables],
                 )
+            assert isinstance(repl, CallableType), "Should not be able to get here."
+            return (
+                param_spec.with_flavor(t.flavor)
+                if (param_spec := repl.param_spec())
+                else repl
+            )
+
         else:
             # TODO: should this branch be removed? better not to fail silently
             return repl
@@ -230,7 +224,7 @@ class ExpandTypeVisitor(TypeVisitor[Type]):
             # must expand both of them with all the argument types,
             # kinds and names in the replacement. The return type in
             # the replacement is ignored.
-            if isinstance(repl, CallableType) or isinstance(repl, Parameters):
+            if isinstance(repl, (CallableType, Parameters)):
                 # Substitute *args: P.args, **kwargs: P.kwargs
                 prefix = param_spec.prefix
                 # we need to expand the types in the prefix, so might as well
@@ -349,9 +343,7 @@ class ExpandTypeVisitor(TypeVisitor[Type]):
         return t.copy_modified(args=self.expand_types(t.args))
 
     def expand_types(self, types: Iterable[Type]) -> list[Type]:
-        a: list[Type] = []
-        for t in types:
-            a.append(t.accept(self))
+        a: list[Type] = [t.accept(self) for t in types]
         return a
 
 
@@ -361,25 +353,24 @@ def expand_unpack_with_variables(
     """May return either a list of types to unpack to, any, or a single
     variable length tuple. The latter may not be valid in all contexts.
     """
-    if isinstance(t.type, TypeVarTupleType):
-        repl = get_proper_type(variables.get(t.type.id, t))
-        if isinstance(repl, TupleType):
-            return repl.items
-        if isinstance(repl, TypeList):
-            return repl.items
-        elif isinstance(repl, Instance) and repl.type.fullname == "builtins.tuple":
-            return repl
-        elif isinstance(repl, AnyType):
-            # tuple[Any, ...] would be better, but we don't have
-            # the type info to construct that type here.
-            return repl
-        elif isinstance(repl, TypeVarTupleType):
-            return [UnpackType(typ=repl)]
-        elif isinstance(repl, UnpackType):
-            return [repl]
-        elif isinstance(repl, UninhabitedType):
-            return None
-        else:
-            raise NotImplementedError(f"Invalid type replacement to expand: {repl}")
-    else:
+    if not isinstance(t.type, TypeVarTupleType):
         raise NotImplementedError(f"Invalid type to expand: {t.type}")
+    repl = get_proper_type(variables.get(t.type.id, t))
+    if isinstance(repl, TupleType):
+        return repl.items
+    if isinstance(repl, TypeList):
+        return repl.items
+    elif isinstance(repl, Instance) and repl.type.fullname == "builtins.tuple":
+        return repl
+    elif isinstance(repl, AnyType):
+        # tuple[Any, ...] would be better, but we don't have
+        # the type info to construct that type here.
+        return repl
+    elif isinstance(repl, TypeVarTupleType):
+        return [UnpackType(typ=repl)]
+    elif isinstance(repl, UnpackType):
+        return [repl]
+    elif isinstance(repl, UninhabitedType):
+        return None
+    else:
+        raise NotImplementedError(f"Invalid type replacement to expand: {repl}")

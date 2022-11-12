@@ -78,12 +78,10 @@ else:
         # See https://stackoverflow.com/questions/473620/how-do-you-create-a-daemon-in-python
         sys.stdout.flush()
         sys.stderr.flush()
-        pid = os.fork()
-        if pid:
+        if pid := os.fork():
             # Parent process: wait for child in case things go bad there.
             npid, sts = os.waitpid(pid, 0)
-            sig = sts & 0xFF
-            if sig:
+            if sig := sts & 0xFF:
                 print("Child killed by signal", sig)
                 return -sig
             sts = sts >> 8
@@ -99,8 +97,7 @@ else:
             os.dup2(devnull, 1)
             os.dup2(devnull, 2)
             os.close(devnull)
-            pid = os.fork()
-            if pid:
+            if pid := os.fork():
                 # Child is done, exit to parent.
                 os._exit(0)
             # Grandchild: run the server.
@@ -231,7 +228,7 @@ class Server:
                                 # If we are crashing, report the crash to the client
                                 tb = traceback.format_exception(*sys.exc_info())
                                 resp = {"error": "Daemon crashed!\n" + "".join(tb)}
-                                resp.update(self._response_metadata())
+                                resp |= self._response_metadata()
                                 resp["stdout"] = debug_stdout.getvalue()
                                 server.write(json.dumps(resp).encode("utf8"))
                                 raise
@@ -262,25 +259,24 @@ class Server:
 
     def run_command(self, command: str, data: dict[str, object]) -> dict[str, object]:
         """Run a specific command from the registry."""
-        key = "cmd_" + command
+        key = f"cmd_{command}"
         method = getattr(self.__class__, key, None)
         if method is None:
             return {"error": f"Unrecognized command '{command}'"}
-        else:
-            if command not in {"check", "recheck", "run"}:
-                # Only the above commands use some error formatting.
-                del data["is_tty"]
-                del data["terminal_width"]
-            ret = method(self, **data)
-            assert isinstance(ret, dict)
-            return ret
+        if command not in {"check", "recheck", "run"}:
+            # Only the above commands use some error formatting.
+            del data["is_tty"]
+            del data["terminal_width"]
+        ret = method(self, **data)
+        assert isinstance(ret, dict)
+        return ret
 
     # Command functions (run in the server via RPC).
 
     def cmd_status(self, fswatcher_dump_file: str | None = None) -> dict[str, object]:
         """Return daemon status."""
         res: dict[str, object] = {}
-        res.update(get_meminfo())
+        res |= get_meminfo()
         if fswatcher_dump_file:
             data = self.fswatcher.dump_file_data() if hasattr(self, "fswatcher") else {}
             # Using .dumps and then writing was noticeably faster than using dump
@@ -405,10 +401,12 @@ class Server:
         if not self.fine_grained_manager:
             res = self.initialize_fine_grained(sources, is_tty, terminal_width)
         else:
-            if not self.following_imports():
-                messages = self.fine_grained_increment(sources)
-            else:
-                messages = self.fine_grained_increment_follow_imports(sources)
+            messages = (
+                self.fine_grained_increment_follow_imports(sources)
+                if self.following_imports()
+                else self.fine_grained_increment(sources)
+            )
+
             res = self.increment_output(messages, sources, is_tty, terminal_width)
         self.flush_caches()
         self.update_stats(res)
@@ -442,10 +440,7 @@ class Server:
             result = mypy.build.build(sources=sources, options=self.options, fscache=self.fscache)
         except mypy.errors.CompileError as e:
             output = "".join(s + "\n" for s in e.messages)
-            if e.use_stdout:
-                out, err = output, ""
-            else:
-                out, err = "", output
+            out, err = (output, "") if e.use_stdout else ("", output)
             return {"out": out, "err": err, "status": 2}
         messages = result.errors
         self.fine_grained_manager = FineGrainedBuildManager(result)
@@ -966,10 +961,7 @@ def get_meminfo() -> dict[str, Any]:
             import resource  # Since it doesn't exist on Windows.
 
             rusage = resource.getrusage(resource.RUSAGE_SELF)
-            if sys.platform == "darwin":
-                factor = 1
-            else:
-                factor = 1024  # Linux
+            factor = 1 if sys.platform == "darwin" else 1024
             res["memory_maxrss_mib"] = rusage.ru_maxrss * factor / MiB
     return res
 
