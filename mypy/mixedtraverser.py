@@ -38,8 +38,7 @@ class MixedTraverserVisitor(TraverserVisitor, TypeTraverserVisitor):
         # TODO: Should we visit generated methods/variables as well, either here or in
         #       TraverserVisitor?
         super().visit_class_def(o)
-        info = o.info
-        if info:
+        if info := o.info:
             for base in info.bases:
                 base.accept(self)
 

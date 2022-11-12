@@ -82,18 +82,19 @@ class Constraint:
         self.origin_type_var = type_var
 
     def __repr__(self) -> str:
-        op_str = "<:"
-        if self.op == SUPERTYPE_OF:
-            op_str = ":>"
+        op_str = ":>" if self.op == SUPERTYPE_OF else "<:"
         return f"{self.type_var} {op_str} {self.target}"
 
     def __hash__(self) -> int:
         return hash((self.type_var, self.op, self.target))
 
     def __eq__(self, other: object) -> bool:
-        if not isinstance(other, Constraint):
-            return False
-        return (self.type_var, self.op, self.target) == (other.type_var, other.op, other.target)
+        return (
+            (self.type_var, self.op, self.target)
+            == (other.type_var, other.op, other.target)
+            if isinstance(other, Constraint)
+            else False
+        )
 
 
 def infer_constraints_for_callable(
@@ -249,17 +250,13 @@ def _infer_constraints(template: Type, actual: Type, direction: int) -> list[Con
             eager=True,
         )
     if direction == SUPERTYPE_OF and isinstance(template, UnionType):
-        # When the template is a union, we are okay with leaving some
-        # type variables indeterminate. This helps with some special
-        # cases, though this isn't very principled.
-        result = any_constraints(
+        if result := any_constraints(
             [
                 infer_constraints_if_possible(t_item, actual, direction)
                 for t_item in template.items
             ],
             eager=False,
-        )
-        if result:
+        ):
             return result
         elif has_recursive_types(template) and not has_recursive_types(actual):
             return handle_recursive_union(template, actual, direction)
@@ -394,24 +391,20 @@ def filter_satisfiable(option: list[Constraint] | None) -> list[Constraint] | No
     """
     if not option:
         return option
-    satisfiable = []
-    for c in option:
-        # TODO: add similar logic for TypeVar values (also in various other places)?
-        if mypy.subtypes.is_subtype(c.target, c.origin_type_var.upper_bound):
-            satisfiable.append(c)
-    if not satisfiable:
-        return None
-    return satisfiable
+    satisfiable = [
+        c
+        for c in option
+        if mypy.subtypes.is_subtype(c.target, c.origin_type_var.upper_bound)
+    ]
+
+    return satisfiable or None
 
 
 def is_same_constraints(x: list[Constraint], y: list[Constraint]) -> bool:
     for c1 in x:
         if not any(is_same_constraint(c1, c2) for c2 in y):
             return False
-    for c1 in y:
-        if not any(is_same_constraint(c1, c2) for c2 in x):
-            return False
-    return True
+    return all(any(is_same_constraint(c1, c2) for c2 in x) for c1 in y)
 
 
 def is_same_constraint(c1: Constraint, c2: Constraint) -> bool:
@@ -457,8 +450,7 @@ def _is_similar_constraints(x: list[Constraint], y: list[Constraint]) -> bool:
 
 
 def simplify_away_incomplete_types(types: Iterable[Type]) -> list[Type]:
-    complete = [typ for typ in types if is_complete_type(typ)]
-    if complete:
+    if complete := [typ for typ in types if is_complete_type(typ)]:
         return complete
     else:
         return list(types)
@@ -552,47 +544,46 @@ class ConstraintBuilderVisitor(TypeVisitor[List[Constraint]]):
     def visit_instance(self, template: Instance) -> list[Constraint]:
         original_actual = actual = self.actual
         res: list[Constraint] = []
-        if isinstance(actual, (CallableType, Overloaded)) and template.type.is_protocol:
-            if template.type.protocol_members == ["__call__"]:
-                # Special case: a generic callback protocol
-                if not any(template == t for t in template.type.inferring):
-                    template.type.inferring.append(template)
-                    call = mypy.subtypes.find_member(
-                        "__call__", template, actual, is_operator=True
-                    )
-                    assert call is not None
-                    if mypy.subtypes.is_subtype(actual, erase_typevars(call)):
-                        subres = infer_constraints(call, actual, self.direction)
-                        res.extend(subres)
-                    template.type.inferring.pop()
-                    return res
+        if (
+            isinstance(actual, (CallableType, Overloaded))
+            and template.type.is_protocol
+            and template.type.protocol_members == ["__call__"]
+            and all(template != t for t in template.type.inferring)
+        ):
+            template.type.inferring.append(template)
+            call = mypy.subtypes.find_member(
+                "__call__", template, actual, is_operator=True
+            )
+            assert call is not None
+            if mypy.subtypes.is_subtype(actual, erase_typevars(call)):
+                subres = infer_constraints(call, actual, self.direction)
+                res.extend(subres)
+            template.type.inferring.pop()
+            return res
         if isinstance(actual, CallableType) and actual.fallback is not None:
             if actual.is_type_obj() and template.type.is_protocol:
                 ret_type = get_proper_type(actual.ret_type)
                 if isinstance(ret_type, TupleType):
                     ret_type = mypy.typeops.tuple_fallback(ret_type)
                 if isinstance(ret_type, Instance):
-                    if self.direction == SUBTYPE_OF:
-                        subtype = template
-                    else:
-                        subtype = ret_type
+                    subtype = template if self.direction == SUBTYPE_OF else ret_type
                     res.extend(
                         self.infer_constraints_from_protocol_members(
                             ret_type, template, subtype, template, class_obj=True
                         )
                     )
             actual = actual.fallback
-        if isinstance(actual, TypeType) and template.type.is_protocol:
-            if isinstance(actual.item, Instance):
-                if self.direction == SUBTYPE_OF:
-                    subtype = template
-                else:
-                    subtype = actual.item
-                res.extend(
-                    self.infer_constraints_from_protocol_members(
-                        actual.item, template, subtype, template, class_obj=True
-                    )
+        if (
+            isinstance(actual, TypeType)
+            and template.type.is_protocol
+            and isinstance(actual.item, Instance)
+        ):
+            subtype = template if self.direction == SUBTYPE_OF else actual.item
+            res.extend(
+                self.infer_constraints_from_protocol_members(
+                    actual.item, template, subtype, template, class_obj=True
                 )
+            )
 
         if isinstance(actual, Overloaded) and actual.fallback is not None:
             actual = actual.fallback
@@ -681,7 +672,7 @@ class ConstraintBuilderVisitor(TypeVisitor[List[Constraint]]):
                             from_concat = bool(prefix.arg_types) or suffix.from_concatenate
                             suffix = suffix.copy_modified(from_concatenate=from_concat)
 
-                        if isinstance(suffix, Parameters) or isinstance(suffix, CallableType):
+                        if isinstance(suffix, (Parameters, CallableType)):
                             # no such thing as variance for ParamSpecs
                             # TODO: is there a case I am missing?
                             # TODO: constraints between prefixes
@@ -784,7 +775,7 @@ class ConstraintBuilderVisitor(TypeVisitor[List[Constraint]]):
                             from_concat = bool(prefix.arg_types) or suffix.from_concatenate
                             suffix = suffix.copy_modified(from_concatenate=from_concat)
 
-                        if isinstance(suffix, Parameters) or isinstance(suffix, CallableType):
+                        if isinstance(suffix, (Parameters, CallableType)):
                             # no such thing as variance for ParamSpecs
                             # TODO: is there a case I am missing?
                             # TODO: constraints between prefixes
@@ -805,16 +796,7 @@ class ConstraintBuilderVisitor(TypeVisitor[List[Constraint]]):
             if (
                 template.type.is_protocol
                 and self.direction == SUPERTYPE_OF
-                and
-                # We avoid infinite recursion for structural subtypes by checking
-                # whether this type already appeared in the inference chain.
-                # This is a conservative way to break the inference cycles.
-                # It never produces any "false" constraints but gives up soon
-                # on purely structural inference cycles, see #3829.
-                # Note that we use is_protocol_implementation instead of is_subtype
-                # because some type may be considered a subtype of a protocol
-                # due to _promote, but still not implement the protocol.
-                not any(template == t for t in reversed(template.type.inferring))
+                and all(template != t for t in reversed(template.type.inferring))
                 and mypy.subtypes.is_protocol_implementation(instance, erased)
             ):
                 template.type.inferring.append(template)
@@ -828,9 +810,7 @@ class ConstraintBuilderVisitor(TypeVisitor[List[Constraint]]):
             elif (
                 instance.type.is_protocol
                 and self.direction == SUBTYPE_OF
-                and
-                # We avoid infinite recursion for structural subtypes also here.
-                not any(instance == i for i in reversed(instance.type.inferring))
+                and all(instance != i for i in reversed(instance.type.inferring))
                 and mypy.subtypes.is_protocol_implementation(erased, instance)
             ):
                 instance.type.inferring.append(instance)
@@ -858,9 +838,14 @@ class ConstraintBuilderVisitor(TypeVisitor[List[Constraint]]):
         elif isinstance(actual, TupleType) and self.direction == SUPERTYPE_OF:
             return infer_constraints(template, mypy.typeops.tuple_fallback(actual), self.direction)
         elif isinstance(actual, TypeVarType):
-            if not actual.values:
-                return infer_constraints(template, actual.upper_bound, self.direction)
-            return []
+            return (
+                []
+                if actual.values
+                else infer_constraints(
+                    template, actual.upper_bound, self.direction
+                )
+            )
+
         elif isinstance(actual, ParamSpecType):
             return infer_constraints(template, actual.upper_bound, self.direction)
         elif isinstance(actual, TypeVarTupleType):
@@ -922,9 +907,10 @@ class ConstraintBuilderVisitor(TypeVisitor[List[Constraint]]):
                 # TODO: check the prefixes match
                 prefix = param_spec.prefix
                 prefix_len = len(prefix.arg_types)
-                cactual_ps = cactual.param_spec()
+                if cactual_ps := cactual.param_spec():
+                    res.append(Constraint(param_spec, SUBTYPE_OF, cactual_ps))
 
-                if not cactual_ps:
+                else:
                     max_prefix_len = len([k for k in cactual.arg_kinds if k in (ARG_POS, ARG_OPT)])
                     prefix_len = min(prefix_len, max_prefix_len)
                     res.append(
@@ -939,9 +925,6 @@ class ConstraintBuilderVisitor(TypeVisitor[List[Constraint]]):
                             ),
                         )
                     )
-                else:
-                    res.append(Constraint(param_spec, SUBTYPE_OF, cactual_ps))
-
                 # compare prefixes
                 cactual_prefix = cactual.copy_modified(
                     arg_types=cactual.arg_types[:prefix_len],
@@ -983,12 +966,9 @@ class ConstraintBuilderVisitor(TypeVisitor[List[Constraint]]):
         elif isinstance(self.actual, TypeType):
             return infer_constraints(template.ret_type, self.actual.item, self.direction)
         elif isinstance(self.actual, Instance):
-            # Instances with __call__ method defined are considered structural
-            # subtypes of Callable with a compatible signature.
-            call = mypy.subtypes.find_member(
+            if call := mypy.subtypes.find_member(
                 "__call__", self.actual, self.actual, is_operator=True
-            )
-            if call:
+            ):
                 return infer_constraints(template, call, self.direction)
             else:
                 return []
@@ -1151,16 +1131,13 @@ def find_matching_overload_items(
 ) -> list[CallableType]:
     """Like find_matching_overload_item, but return all matches, not just the first."""
     items = overloaded.items
-    res = []
-    for item in items:
-        # Return type may be indeterminate in the template, so ignore it when performing a
-        # subtype check.
+    return [
+        item
+        for item in items
         if mypy.subtypes.is_callable_compatible(
-            item, template, is_compat=mypy.subtypes.is_subtype, ignore_return=True
-        ):
-            res.append(item)
-    if not res:
-        # Falling back to all items if we can't find a match is pretty arbitrary, but
-        # it maintains backward compatibility.
-        res = items[:]
-    return res
+            item,
+            template,
+            is_compat=mypy.subtypes.is_subtype,
+            ignore_return=True,
+        )
+    ] or items[:]

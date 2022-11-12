@@ -855,10 +855,7 @@ class TypeChecker(NodeVisitor[None], CheckerPluginInterface):
             # Awaitable: ty is Any.
             return AnyType(TypeOfAny.special_form)
         elif return_type.args:
-            # AwaitableGenerator, Generator, AsyncGenerator, Iterator, or Iterable; ty is args[0].
-            ret_type = return_type.args[0]
-            # TODO not best fix, better have dedicated yield token
-            return ret_type
+            return return_type.args[0]
         else:
             # If the function's declared supertype of Generator has no type
             # parameters (i.e. is `object`), then the yielded values can't
@@ -968,10 +965,7 @@ class TypeChecker(NodeVisitor[None], CheckerPluginInterface):
                     if orig_type.type is None:
                         # Ah this is a partial type. Give it the type of the function.
                         orig_def = defn.original_def
-                        if isinstance(orig_def, Decorator):
-                            var = orig_def.var
-                        else:
-                            var = orig_def
+                        var = orig_def.var if isinstance(orig_def, Decorator) else orig_def
                         partial_types = self.find_partial_types(var)
                         if partial_types is not None:
                             var.type = new_type
@@ -1054,24 +1048,24 @@ class TypeChecker(NodeVisitor[None], CheckerPluginInterface):
                         )
                         and not self.dynamic_funcs[-1]
                     ):
-                        self.fail(
-                            message_registry.MUST_HAVE_NONE_RETURN_TYPE.format(fdef.name), item
-                        )
-
+                        self.fail(message_registry.MUST_HAVE_NONE_RETURN_TYPE.format(fdef.name), fdef)
                     # Check validity of __new__ signature
                     if fdef.info and fdef.name == "__new__":
                         self.check___new___signature(fdef, typ)
 
                     self.check_for_missing_annotations(fdef)
-                    if self.options.disallow_any_unimported:
-                        if fdef.type and isinstance(fdef.type, CallableType):
-                            ret_type = fdef.type.ret_type
-                            if has_any_from_unimported_type(ret_type):
-                                self.msg.unimported_type_becomes_any("Return type", ret_type, fdef)
-                            for idx, arg_type in enumerate(fdef.type.arg_types):
-                                if has_any_from_unimported_type(arg_type):
-                                    prefix = f'Argument {idx + 1} to "{fdef.name}"'
-                                    self.msg.unimported_type_becomes_any(prefix, arg_type, fdef)
+                    if (
+                        self.options.disallow_any_unimported
+                        and fdef.type
+                        and isinstance(fdef.type, CallableType)
+                    ):
+                        ret_type = fdef.type.ret_type
+                        if has_any_from_unimported_type(ret_type):
+                            self.msg.unimported_type_becomes_any("Return type", ret_type, fdef)
+                        for idx, arg_type in enumerate(fdef.type.arg_types):
+                            if has_any_from_unimported_type(arg_type):
+                                prefix = f'Argument {idx + 1} to "{fdef.name}"'
+                                self.msg.unimported_type_becomes_any(prefix, arg_type, fdef)
                     check_for_explicit_any(
                         fdef.type, self.options, self.is_typeshed_stub, self.msg, context=fdef
                     )
@@ -1092,16 +1086,14 @@ class TypeChecker(NodeVisitor[None], CheckerPluginInterface):
                         )
                     self.check_unbound_return_typevar(typ)
 
-                # Check that Generator functions have the appropriate return type.
                 if defn.is_generator:
                     if defn.is_async_generator:
                         if not self.is_async_generator_return_type(typ.ret_type):
                             self.fail(
                                 message_registry.INVALID_RETURN_TYPE_FOR_ASYNC_GENERATOR, typ
                             )
-                    else:
-                        if not self.is_generator_return_type(typ.ret_type, defn.is_coroutine):
-                            self.fail(message_registry.INVALID_RETURN_TYPE_FOR_GENERATOR, typ)
+                    elif not self.is_generator_return_type(typ.ret_type, defn.is_coroutine):
+                        self.fail(message_registry.INVALID_RETURN_TYPE_FOR_GENERATOR, typ)
 
                 # Fix the type if decorated with `@types.coroutine` or `@asyncio.coroutine`.
                 if defn.is_awaitable_coroutine:
@@ -1366,9 +1358,11 @@ class TypeChecker(NodeVisitor[None], CheckerPluginInterface):
     def check_for_missing_annotations(self, fdef: FuncItem) -> None:
         # Check for functions with unspecified/not fully specified types.
         def is_unannotated_any(t: Type) -> bool:
-            if not isinstance(t, ProperType):
-                return False
-            return isinstance(t, AnyType) and t.type_of_any == TypeOfAny.unannotated
+            return (
+                isinstance(t, AnyType) and t.type_of_any == TypeOfAny.unannotated
+                if isinstance(t, ProperType)
+                else False
+            )
 
         has_explicit_annotation = isinstance(fdef.type, CallableType) and any(
             not is_unannotated_any(t) for t in fdef.type.arg_types + [fdef.type.ret_type]
@@ -1378,9 +1372,10 @@ class TypeChecker(NodeVisitor[None], CheckerPluginInterface):
         check_incomplete_defs = self.options.disallow_incomplete_defs and has_explicit_annotation
         if show_untyped and (self.options.disallow_untyped_defs or check_incomplete_defs):
             if fdef.type is None and self.options.disallow_untyped_defs:
-                if not fdef.arguments or (
-                    len(fdef.arguments) == 1
-                    and (fdef.arg_names[0] == "self" or fdef.arg_names[0] == "cls")
+                if (
+                    not fdef.arguments
+                    or len(fdef.arguments) == 1
+                    and fdef.arg_names[0] in ["self", "cls"]
                 ):
                     self.fail(message_registry.RETURN_TYPE_EXPECTED, fdef)
                     if not has_return_statement(fdef) and not fdef.is_generator:
@@ -1463,7 +1458,7 @@ class TypeChecker(NodeVisitor[None], CheckerPluginInterface):
             self.msg.invalid_signature(reverse_type, context)
             return
 
-        if reverse_name in ("__eq__", "__ne__"):
+        if reverse_name in {"__eq__", "__ne__"}:
             # These are defined for all objects => can't cause trouble.
             return
 
@@ -1472,9 +1467,11 @@ class TypeChecker(NodeVisitor[None], CheckerPluginInterface):
         ret_type = get_proper_type(reverse_type.ret_type)
         if isinstance(ret_type, AnyType):
             return
-        if isinstance(ret_type, Instance):
-            if ret_type.type.fullname == "builtins.object":
-                return
+        if (
+            isinstance(ret_type, Instance)
+            and ret_type.type.fullname == "builtins.object"
+        ):
+            return
         if reverse_type.arg_kinds[0] == ARG_STAR:
             reverse_type = reverse_type.copy_modified(
                 arg_types=[reverse_type.arg_types[0]] * 2,
@@ -1636,19 +1633,18 @@ class TypeChecker(NodeVisitor[None], CheckerPluginInterface):
             return
         typ = bind_self(self.function_type(defn))
         cls = defn.info
-        other_method = "__" + method[3:]
+        other_method = f"__{method[3:]}"
         if cls.has_readable_member(other_method):
             instance = fill_typevars(cls)
             typ2 = get_proper_type(
                 self.expr_checker.analyze_external_member_access(other_method, instance, defn)
             )
-            fail = False
-            if isinstance(typ2, FunctionLike):
-                if not is_more_general_arg_prefix(typ, typ2):
-                    fail = True
-            else:
-                # TODO overloads
-                fail = True
+            fail = (
+                isinstance(typ2, FunctionLike)
+                and not is_more_general_arg_prefix(typ, typ2)
+                or not isinstance(typ2, FunctionLike)
+            )
+
             if fail:
                 self.msg.signatures_incompatible(method, other_method, defn)
 
@@ -1720,7 +1716,7 @@ class TypeChecker(NodeVisitor[None], CheckerPluginInterface):
             return
         typ = get_proper_type(typ)
         if not isinstance(typ, TupleType) or not all(
-            [is_string_literal(item) for item in typ.items]
+            is_string_literal(item) for item in typ.items
         ):
             self.msg.note(
                 "__match_args__ must be a tuple containing string literals for checking "
@@ -1732,28 +1728,24 @@ class TypeChecker(NodeVisitor[None], CheckerPluginInterface):
     def expand_typevars(
         self, defn: FuncItem, typ: CallableType
     ) -> list[tuple[FuncItem, CallableType]]:
-        # TODO use generator
-        subst: list[list[tuple[TypeVarId, Type]]] = []
         tvars = list(typ.variables) or []
         if defn.info:
             # Class type variables
             tvars += defn.info.defn.type_vars or []
-        # TODO(PEP612): audit for paramspec
-        for tvar in tvars:
-            if isinstance(tvar, TypeVarType) and tvar.values:
-                subst.append([(tvar.id, value) for value in tvar.values])
-        # Make a copy of the function to check for each combination of
-        # value restricted type variables. (Except when running mypyc,
-        # where we need one canonical version of the function.)
-        if subst and not (self.options.mypyc or self.options.inspections):
-            result: list[tuple[FuncItem, CallableType]] = []
-            for substitutions in itertools.product(*subst):
-                mapping = dict(substitutions)
-                expanded = cast(CallableType, expand_type(typ, mapping))
-                result.append((expand_func(defn, mapping), expanded))
-            return result
-        else:
+        subst: list[list[tuple[TypeVarId, Type]]] = [
+            [(tvar.id, value) for value in tvar.values]
+            for tvar in tvars
+            if isinstance(tvar, TypeVarType) and tvar.values
+        ]
+
+        if not subst or self.options.mypyc or self.options.inspections:
             return [(defn, typ)]
+        result: list[tuple[FuncItem, CallableType]] = []
+        for substitutions in itertools.product(*subst):
+            mapping = dict(substitutions)
+            expanded = cast(CallableType, expand_type(typ, mapping))
+            result.append((expand_func(defn, mapping), expanded))
+        return result
 
     def check_method_override(self, defn: FuncDef | OverloadedFuncDef | Decorator) -> None:
         """Check if function definition is compatible with base classes.
@@ -1776,8 +1768,7 @@ class TypeChecker(NodeVisitor[None], CheckerPluginInterface):
         """
         if base:
             name = defn.name
-            base_attr = base.names.get(name)
-            if base_attr:
+            if base_attr := base.names.get(name):
                 # First, check if we override a final (always an error, even with Any types).
                 if is_final_node(base_attr.node):
                     self.msg.cant_override_final(name, base.name, defn)
@@ -1793,7 +1784,7 @@ class TypeChecker(NodeVisitor[None], CheckerPluginInterface):
                     return True
                 if name in operators.inplace_operator_methods:
                     # Figure out the name of the corresponding operator method.
-                    method = "__" + name[3:]
+                    method = f"__{name[3:]}"
                     # An inplace operator method such as __iadd__ might not be
                     # always introduced safely if a base class defined __add__.
                     # TODO can't come up with an example where this is

@@ -51,8 +51,12 @@ def run_mypy(mypy_and_args: list[str], filename: str, tmp_name: str) -> str:
 
 def get_revealed_type(line: str, relevant_file: str, relevant_line: int) -> str | None:
     m = re.match(r'(.+?):(\d+): note: Revealed type is "(.*)"$', line)
-    if m and int(m.group(2)) == relevant_line and os.path.samefile(relevant_file, m.group(1)):
-        return m.group(3)
+    if (
+        m
+        and int(m[2]) == relevant_line
+        and os.path.samefile(relevant_file, m[1])
+    ):
+        return m[3]
     else:
         return None
 
@@ -60,8 +64,7 @@ def get_revealed_type(line: str, relevant_file: str, relevant_line: int) -> str 
 def process_output(output: str, filename: str, start_line: int) -> tuple[str | None, bool]:
     error_found = False
     for line in output.splitlines():
-        t = get_revealed_type(line, filename, start_line)
-        if t:
+        if t := get_revealed_type(line, filename, start_line):
             return t, error_found
         elif "error:" in line:
             error_found = True

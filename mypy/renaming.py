@@ -205,8 +205,7 @@ class VariableRenameVisitor(TraverserVisitor):
         """
         if isinstance(lvalue, NameExpr):
             name = lvalue.name
-            is_new = self.record_assignment(name, True)
-            if is_new:
+            if is_new := self.record_assignment(name, True):
                 self.handle_def(lvalue)
             else:
                 self.handle_refine(lvalue)
@@ -274,14 +273,7 @@ class VariableRenameVisitor(TraverserVisitor):
             if len(refs) == 1:
                 # Only one definition -- no renaming needed.
                 continue
-            if is_func:
-                # In a function, don't rename the first definition, as it
-                # may be an argument that must preserve the name.
-                to_rename = refs[1:]
-            else:
-                # At module top level, don't rename the final definition,
-                # as it will be publicly visible outside the module.
-                to_rename = refs[:-1]
+            to_rename = refs[1:] if is_func else refs[:-1]
             for i, item in enumerate(to_rename):
                 rename_refs(item, i)
         self.refs.pop()
@@ -393,13 +385,7 @@ class VariableRenameVisitor(TraverserVisitor):
         var_blocks = self.var_blocks[-1]
         if name not in var_blocks:
             # New definition in this scope.
-            if can_be_redefined:
-                # Store the block where this was defined to allow redefinition in
-                # the same block only.
-                var_blocks[name] = block
-            else:
-                # This doesn't support arbitrary redefinition.
-                var_blocks[name] = -1
+            var_blocks[name] = block if can_be_redefined else -1
             return True
         elif var_blocks[name] == block:
             # Redefinition -- defines a new variable with the same name.

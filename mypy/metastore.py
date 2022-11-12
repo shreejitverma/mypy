@@ -103,7 +103,7 @@ class FilesystemMetadataStore(MetadataStore):
             return False
 
         path = os.path.join(self.cache_dir_prefix, name)
-        tmp_filename = path + "." + random_string()
+        tmp_filename = f"{path}.{random_string()}"
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(tmp_filename, "w") as f:

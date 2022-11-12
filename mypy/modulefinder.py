@@ -184,9 +184,7 @@ class FindModuleCache:
         self.results: dict[str, ModuleSearchResult] = {}
         self.ns_ancestors: dict[str, str] = {}
         self.options = options
-        custom_typeshed_dir = None
-        if options:
-            custom_typeshed_dir = options.custom_typeshed_dir
+        custom_typeshed_dir = options.custom_typeshed_dir if options else None
         self.stdlib_py_versions = stdlib_py_versions or load_stdlib_py_versions(
             custom_typeshed_dir
         )
@@ -212,7 +210,8 @@ class FindModuleCache:
             d = os.path.dirname(p)
             for _ in range(id.count(".")):
                 if not any(
-                    self.fscache.isfile(os.path.join(d, "__init__" + x)) for x in PYTHON_EXTENSIONS
+                    self.fscache.isfile(os.path.join(d, f"__init__{x}"))
+                    for x in PYTHON_EXTENSIONS
                 ):
                     return None
                 d = os.path.dirname(d)
@@ -227,9 +226,9 @@ class FindModuleCache:
                 return None
 
             basename, ext = os.path.splitext(parent)
-            if not any(parent.endswith("__init__" + x) for x in PYTHON_EXTENSIONS) and (
-                ext in PYTHON_EXTENSIONS and not self.fscache.isdir(basename)
-            ):
+            if not any(
+                parent.endswith(f"__init__{x}") for x in PYTHON_EXTENSIONS
+            ) and (ext in PYTHON_EXTENSIONS and not self.fscache.isdir(basename)):
                 # If we do find such a *module* (and crucially, we don't want a package,
                 # hence the filtering out of __init__ files, and checking for the presence
                 # of a folder with a matching name), then we can be pretty confident that
@@ -307,7 +306,8 @@ class FindModuleCache:
                 use_typeshed = self._typeshed_has_version(top_level)
             self.results[id] = self._find_module(id, use_typeshed)
             if (
-                not (fast_path or (self.options is not None and self.options.fast_module_lookup))
+                not fast_path
+                and (self.options is None or not self.options.fast_module_lookup)
                 and self.results[id] is ModuleNotFoundReason.NOT_FOUND
                 and self._can_find_module_in_parent_dir(id)
             ):
@@ -331,18 +331,21 @@ class FindModuleCache:
             if self.fscache.isfile(os.path.join(dir_path, "py.typed")):
                 return os.path.join(pkg_dir, *components[:-1]), index == 0
             elif not plausible_match and (
-                self.fscache.isdir(dir_path) or self.fscache.isfile(dir_path + ".py")
+                self.fscache.isdir(dir_path)
+                or self.fscache.isfile(f"{dir_path}.py")
             ):
                 plausible_match = True
             # If this is not a directory then we can't traverse further into it
             if not self.fscache.isdir(dir_path):
                 break
-        if approved_stub_package_exists(components[0]):
-            if len(components) == 1 or (
+        if approved_stub_package_exists(components[0]) and (
+            len(components) == 1
+            or (
                 self.find_module(components[0])
                 is ModuleNotFoundReason.APPROVED_STUBS_NOT_INSTALLED
-            ):
-                return ModuleNotFoundReason.APPROVED_STUBS_NOT_INSTALLED
+            )
+        ):
+            return ModuleNotFoundReason.APPROVED_STUBS_NOT_INSTALLED
         if approved_stub_package_exists(".".join(components[:2])):
             return ModuleNotFoundReason.APPROVED_STUBS_NOT_INSTALLED
         if plausible_match:
@@ -429,7 +432,7 @@ class FindModuleCache:
         need_installed_stubs = False
         # Third-party stub/typed packages
         for pkg_dir in self.search_paths.package_path:
-            stub_name = components[0] + "-stubs"
+            stub_name = f"{components[0]}-stubs"
             stub_dir = os.path.join(pkg_dir, stub_name)
             if fscache.isdir(stub_dir) and self._is_compatible_stub_package(stub_dir):
                 stub_typed_file = os.path.join(stub_dir, "py.typed")
@@ -481,7 +484,7 @@ class FindModuleCache:
         # elements of lib_path.  This is probably much shorter than lib_path itself.
         # Now just look for 'baz.pyi', 'baz/__init__.py', etc., inside those directories.
         seplast = os.sep + components[-1]  # so e.g. '/baz'
-        sepinit = os.sep + "__init__"
+        sepinit = f"{os.sep}__init__"
         near_misses = []  # Collect near misses for namespace mode (see below).
         for base_dir, verify in candidate_base_dirs:
             base_path = base_dir + seplast  # so e.g. '/usr/lib/python3.4/foo/bar/baz'
@@ -492,7 +495,7 @@ class FindModuleCache:
             # Prefer package over module, i.e. baz/__init__.py* over baz.py*.
             for extension in PYTHON_EXTENSIONS:
                 path = base_path + sepinit + extension
-                path_stubs = base_path + "-stubs" + sepinit + extension
+                path_stubs = f"{base_path}-stubs{sepinit}{extension}"
                 if fscache.isfile_case(path, dir_prefix):
                     has_init = True
                     if verify and not verify_module(fscache, id, path, dir_prefix):
@@ -506,9 +509,13 @@ class FindModuleCache:
                     return path_stubs
 
             # In namespace mode, register a potential namespace package
-            if self.options and self.options.namespace_packages:
-                if fscache.exists_case(base_path, dir_prefix) and not has_init:
-                    near_misses.append((base_path, dir_prefix))
+            if (
+                self.options
+                and self.options.namespace_packages
+                and fscache.exists_case(base_path, dir_prefix)
+                and not has_init
+            ):
+                near_misses.append((base_path, dir_prefix))
 
             # No package, look for module.
             for extension in PYTHON_EXTENSIONS:
@@ -615,7 +622,7 @@ class FindModuleCache:
                     or self.fscache.isfile(os.path.join(subpath, "__init__.pyi"))
                 ):
                     seen.add(name)
-                    sources.extend(self.find_modules_recursive(module + "." + name))
+                    sources.extend(self.find_modules_recursive(f"{module}.{name}"))
             else:
                 stem, suffix = os.path.splitext(name)
                 if stem == "__init__":
@@ -624,7 +631,7 @@ class FindModuleCache:
                     # (If we sorted names by keyfunc) we could probably just make the BuildSource
                     # ourselves, but this ensures compatibility with find_module / the cache
                     seen.add(stem)
-                    sources.extend(self.find_modules_recursive(module + "." + stem))
+                    sources.extend(self.find_modules_recursive(f"{module}.{stem}"))
         return sources
 
 
@@ -654,7 +661,7 @@ def verify_module(fscache: FileSystemCache, id: str, path: str, prefix: str) -> 
     """Check that all packages containing id have a __init__ file."""
     if is_init_file(path):
         path = os.path.dirname(path)
-    for i in range(id.count(".")):
+    for _ in range(id.count(".")):
         path = os.path.dirname(path)
         if not any(
             fscache.isfile_case(os.path.join(path, f"__init__{extension}"), prefix)
@@ -681,9 +688,7 @@ def highest_init_level(fscache: FileSystemCache, id: str, path: str, prefix: str
 
 def mypy_path() -> list[str]:
     path_env = os.getenv("MYPYPATH")
-    if not path_env:
-        return []
-    return path_env.split(os.pathsep)
+    return path_env.split(os.pathsep) if path_env else []
 
 
 def default_lib_path(
@@ -698,10 +703,9 @@ def default_lib_path(
         versions_file = os.path.join(typeshed_dir, "VERSIONS")
         if not os.path.isdir(typeshed_dir) or not os.path.isfile(versions_file):
             print(
-                "error: --custom-typeshed-dir does not point to a valid typeshed ({})".format(
-                    custom_typeshed_dir
-                )
+                f"error: --custom-typeshed-dir does not point to a valid typeshed ({custom_typeshed_dir})"
             )
+
             sys.exit(2)
     else:
         auto = os.path.join(data_dir, "stubs-auto")
@@ -709,23 +713,16 @@ def default_lib_path(
             data_dir = auto
         typeshed_dir = os.path.join(data_dir, "typeshed", "stdlib")
         mypy_extensions_dir = os.path.join(data_dir, "typeshed", "stubs", "mypy-extensions")
-    path.append(typeshed_dir)
-
-    # Get mypy-extensions stubs from typeshed, since we treat it as an
-    # "internal" library, similar to typing and typing-extensions.
-    path.append(mypy_extensions_dir)
-
+    path.extend((typeshed_dir, mypy_extensions_dir))
     # Add fallback path that can be used if we have a broken installation.
     if sys.platform != "win32":
         path.append("/usr/local/lib/mypy")
     if not path:
         print(
-            "Could not resolve typeshed subdirectories. Your mypy install is broken.\n"
-            "Python executable is located at {}.\nMypy located at {}".format(
-                sys.executable, data_dir
-            ),
+            f"Could not resolve typeshed subdirectories. Your mypy install is broken.\nPython executable is located at {sys.executable}.\nMypy located at {data_dir}",
             file=sys.stderr,
         )
+
         sys.exit(1)
     return path
 
@@ -805,10 +802,7 @@ def compute_search_paths(
         # to the lib_path
         # TODO: Don't do this in some cases; for motivation see see
         # https://github.com/python/mypy/issues/4195#issuecomment-341915031
-        if options.bazel:
-            dir = "."
-        else:
-            dir = os.getcwd()
+        dir = "." if options.bazel else os.getcwd()
         if dir not in lib_path:
             python_path.insert(0, dir)
 

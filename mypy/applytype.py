@@ -39,16 +39,18 @@ def get_target_type(
     if values:
         if isinstance(p_type, AnyType):
             return type
-        if isinstance(p_type, TypeVarType) and p_type.values:
-            # Allow substituting T1 for T if every allowed value of T1
-            # is also a legal value of T.
-            if all(any(mypy.subtypes.is_same_type(v, v1) for v in values) for v1 in p_type.values):
-                return type
-        matching = []
-        for value in values:
-            if mypy.subtypes.is_subtype(type, value):
-                matching.append(value)
-        if matching:
+        if (
+            isinstance(p_type, TypeVarType)
+            and p_type.values
+            and all(
+                any(mypy.subtypes.is_same_type(v, v1) for v in values)
+                for v1 in p_type.values
+            )
+        ):
+            return type
+        if matching := [
+            value for value in values if mypy.subtypes.is_subtype(type, value)
+        ]:
             best = matching[0]
             # If there are more than one matching value, we select the narrowest
             for match in matching[1:]:
@@ -107,7 +109,7 @@ def apply_generic_arguments(
         nt = id_to_type.get(param_spec.id)
         if nt is not None:
             nt = get_proper_type(nt)
-            if isinstance(nt, CallableType) or isinstance(nt, Parameters):
+            if isinstance(nt, (CallableType, Parameters)):
                 callable = callable.expand_param_spec(nt)
 
     # Apply arguments to argument types.
