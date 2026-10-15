@@ -10,6 +10,7 @@ in places where efficient access to properties is not important.
 For those cases some other technique should be used.
 """
 
+
 from __future__ import annotations
 
 from typing import Any, TypeVar
@@ -21,7 +22,4 @@ T = TypeVar("T")
 # This won't ever be true at runtime, but we consider it true during
 # mypyc compilations.
 MYPYC = False
-if MYPYC:
-    Bogus = FlexibleAlias[T, Any]
-else:
-    Bogus = FlexibleAlias[T, T]
+Bogus = FlexibleAlias[T, Any] if MYPYC else FlexibleAlias[T, T]

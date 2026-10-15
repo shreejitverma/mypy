@@ -100,8 +100,7 @@ def run_cmd(name: str) -> int:
 
 def start_background_cmd(name: str) -> Popen:
     cmd = cmds[name]
-    proc = subprocess.Popen(cmd, stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
-    return proc
+    return subprocess.Popen(cmd, stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
 
 
 def wait_background_cmd(name: str, proc: Popen) -> int:
@@ -136,17 +135,14 @@ def main() -> None:
     if "self" in args and "lint" in args:
         # Perform lint and self check in parallel as it's faster.
         proc = start_background_cmd("lint")
-        cmd_status = run_cmd("self")
-        if cmd_status:
+        if cmd_status := run_cmd("self"):
             status = cmd_status
-        cmd_status = wait_background_cmd("lint", proc)
-        if cmd_status:
+        if cmd_status := wait_background_cmd("lint", proc):
             status = cmd_status
         args = [arg for arg in args if arg not in ("self", "lint")]
 
     for arg in args:
-        cmd_status = run_cmd(arg)
-        if cmd_status:
+        if cmd_status := run_cmd(arg):
             status = cmd_status
 
     exit(status)

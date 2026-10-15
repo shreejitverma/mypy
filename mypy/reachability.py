@@ -120,10 +120,9 @@ def infer_condition_value(expr: Expression, options: Options) -> int:
     name = ""
     negated = False
     alias = expr
-    if isinstance(alias, UnaryExpr):
-        if alias.op == "not":
-            expr = alias.expr
-            negated = True
+    if isinstance(alias, UnaryExpr) and alias.op == "not":
+        expr = alias.expr
+        negated = True
     result = TRUTH_VALUE_UNKNOWN
     if isinstance(expr, NameExpr):
         name = expr.name
@@ -146,16 +145,22 @@ def infer_condition_value(expr: Expression, options: Options) -> int:
         if result == TRUTH_VALUE_UNKNOWN:
             result = consider_sys_platform(expr, options.platform)
     if result == TRUTH_VALUE_UNKNOWN:
-        if name == "PY2":
+        if (
+            name == "PY2"
+            or name != "PY3"
+            and name not in ["MYPY", "TYPE_CHECKING"]
+            and name not in options.always_true
+            and name in options.always_false
+        ):
             result = ALWAYS_FALSE
-        elif name == "PY3":
+        elif (
+            name == "PY3"
+            or name not in ["MYPY", "TYPE_CHECKING"]
+            and name in options.always_true
+        ):
             result = ALWAYS_TRUE
-        elif name == "MYPY" or name == "TYPE_CHECKING":
+        elif name in ["MYPY", "TYPE_CHECKING"]:
             result = MYPY_TRUE
-        elif name in options.always_true:
-            result = ALWAYS_TRUE
-        elif name in options.always_false:
-            result = ALWAYS_FALSE
     if negated:
         result = inverted_truth_mapping[result]
     return result
@@ -235,9 +240,12 @@ def consider_sys_platform(expr: Expression, platform: str) -> int:
         if not is_sys_attr(expr.operands[0], "platform"):
             return TRUTH_VALUE_UNKNOWN
         right = expr.operands[1]
-        if not isinstance(right, StrExpr):
-            return TRUTH_VALUE_UNKNOWN
-        return fixed_comparison(platform, op, right.value)
+        return (
+            fixed_comparison(platform, op, right.value)
+            if isinstance(right, StrExpr)
+            else TRUTH_VALUE_UNKNOWN
+        )
+
     elif isinstance(expr, CallExpr):
         if not isinstance(expr.callee, MemberExpr):
             return TRUTH_VALUE_UNKNOWN
@@ -247,10 +255,7 @@ def consider_sys_platform(expr: Expression, platform: str) -> int:
             return TRUTH_VALUE_UNKNOWN
         if expr.callee.name != "startswith":
             return TRUTH_VALUE_UNKNOWN
-        if platform.startswith(expr.args[0].value):
-            return ALWAYS_TRUE
-        else:
-            return ALWAYS_FALSE
+        return ALWAYS_TRUE if platform.startswith(expr.args[0].value) else ALWAYS_FALSE
     else:
         return TRUTH_VALUE_UNKNOWN
 
@@ -270,22 +275,19 @@ def fixed_comparison(left: Targ, op: str, right: Targ) -> int:
         return rmap[left >= right]
     if op == "<":
         return rmap[left < right]
-    if op == ">":
-        return rmap[left > right]
-    return TRUTH_VALUE_UNKNOWN
+    return rmap[left > right] if op == ">" else TRUTH_VALUE_UNKNOWN
 
 
 def contains_int_or_tuple_of_ints(expr: Expression) -> None | int | tuple[int, ...]:
     if isinstance(expr, IntExpr):
         return expr.value
-    if isinstance(expr, TupleExpr):
-        if literal(expr) == LITERAL_YES:
-            thing = []
-            for x in expr.items:
-                if not isinstance(x, IntExpr):
-                    return None
-                thing.append(x.value)
-            return tuple(thing)
+    if isinstance(expr, TupleExpr) and literal(expr) == LITERAL_YES:
+        thing = []
+        for x in expr.items:
+            if not isinstance(x, IntExpr):
+                return None
+            thing.append(x.value)
+        return tuple(thing)
     return None
 
 
@@ -297,9 +299,11 @@ def contains_sys_version_info(expr: Expression) -> None | int | tuple[int | None
         if isinstance(index, IntExpr):
             return index.value
         if isinstance(index, SliceExpr):
-            if index.stride is not None:
-                if not isinstance(index.stride, IntExpr) or index.stride.value != 1:
-                    return None
+            if index.stride is not None and (
+                not isinstance(index.stride, IntExpr)
+                or index.stride.value != 1
+            ):
+                return None
             begin = end = None
             if index.begin_index is not None:
                 if not isinstance(index.begin_index, IntExpr):
@@ -317,12 +321,12 @@ def is_sys_attr(expr: Expression, name: str) -> bool:
     # TODO: This currently doesn't work with code like this:
     # - import sys as _sys
     # - from sys import version_info
-    if isinstance(expr, MemberExpr) and expr.name == name:
-        if isinstance(expr.expr, NameExpr) and expr.expr.name == "sys":
-            # TODO: Guard against a local named sys, etc.
-            # (Though later passes will still do most checking.)
-            return True
-    return False
+    return (
+        isinstance(expr, MemberExpr)
+        and expr.name == name
+        and isinstance(expr.expr, NameExpr)
+        and expr.expr.name == "sys"
+    )
 
 
 def mark_block_unreachable(block: Block) -> None:

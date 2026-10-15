@@ -16,28 +16,31 @@ def map_instance_to_supertype(instance: Instance, superclass: TypeInfo) -> Insta
         # Fast path: `instance` already belongs to `superclass`.
         return instance
 
-    if superclass.fullname == "builtins.tuple" and instance.type.tuple_type:
-        if has_type_vars(instance.type.tuple_type):
-            # We special case mapping generic tuple types to tuple base, because for
-            # such tuples fallback can't be calculated before applying type arguments.
-            alias = instance.type.special_alias
-            assert alias is not None
-            if not alias._is_recursive:
-                # Unfortunately we can't support this for generic recursive tuples.
-                # If we skip this special casing we will fall back to tuple[Any, ...].
-                env = instance_to_type_environment(instance)
-                tuple_type = expand_type(instance.type.tuple_type, env)
-                if isinstance(tuple_type, TupleType):
-                    # Make the import here to avoid cyclic imports.
-                    import mypy.typeops
+    if (
+        superclass.fullname == "builtins.tuple"
+        and instance.type.tuple_type
+        and has_type_vars(instance.type.tuple_type)
+    ):
+        # We special case mapping generic tuple types to tuple base, because for
+        # such tuples fallback can't be calculated before applying type arguments.
+        alias = instance.type.special_alias
+        assert alias is not None
+        if not alias._is_recursive:
+            # Unfortunately we can't support this for generic recursive tuples.
+            # If we skip this special casing we will fall back to tuple[Any, ...].
+            env = instance_to_type_environment(instance)
+            tuple_type = expand_type(instance.type.tuple_type, env)
+            if isinstance(tuple_type, TupleType):
+                # Make the import here to avoid cyclic imports.
+                import mypy.typeops
 
-                    return mypy.typeops.tuple_fallback(tuple_type)
+                return mypy.typeops.tuple_fallback(tuple_type)
 
-    if not superclass.type_vars:
-        # Fast path: `superclass` has no type variables to map to.
-        return Instance(superclass, [])
-
-    return map_instance_to_supertypes(instance, superclass)[0]
+    return (
+        map_instance_to_supertypes(instance, superclass)[0]
+        if superclass.type_vars
+        else Instance(superclass, [])
+    )
 
 
 def map_instance_to_supertypes(instance: Instance, supertype: TypeInfo) -> list[Instance]:
@@ -54,10 +57,9 @@ def map_instance_to_supertypes(instance: Instance, supertype: TypeInfo) -> list[
         result.extend(types)
     if result:
         return result
-    else:
-        # Nothing. Presumably due to an error. Construct a dummy using Any.
-        any_type = AnyType(TypeOfAny.from_error)
-        return [Instance(supertype, [any_type] * len(supertype.type_vars))]
+    # Nothing. Presumably due to an error. Construct a dummy using Any.
+    any_type = AnyType(TypeOfAny.from_error)
+    return [Instance(supertype, [any_type] * len(supertype.type_vars))]
 
 
 def class_derivation_paths(typ: TypeInfo, supertype: TypeInfo) -> list[list[TypeInfo]]:
@@ -78,8 +80,10 @@ def class_derivation_paths(typ: TypeInfo, supertype: TypeInfo) -> list[list[Type
             result.append([btype])
         else:
             # Try constructing a longer path via the base class.
-            for path in class_derivation_paths(btype, supertype):
-                result.append([btype] + path)
+            result.extend(
+                [btype] + path
+                for path in class_derivation_paths(btype, supertype)
+            )
 
     return result
 
@@ -98,11 +102,10 @@ def map_instance_to_direct_supertypes(instance: Instance, supertype: TypeInfo) -
 
     if result:
         return result
-    else:
-        # Relationship with the supertype not specified explicitly. Use dynamic
-        # type arguments implicitly.
-        any_type = AnyType(TypeOfAny.unannotated)
-        return [Instance(supertype, [any_type] * len(supertype.type_vars))]
+    # Relationship with the supertype not specified explicitly. Use dynamic
+    # type arguments implicitly.
+    any_type = AnyType(TypeOfAny.unannotated)
+    return [Instance(supertype, [any_type] * len(supertype.type_vars))]
 
 
 def instance_to_type_environment(instance: Instance) -> dict[TypeVarId, Type]:

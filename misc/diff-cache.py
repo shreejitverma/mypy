@@ -95,10 +95,7 @@ def main() -> None:
             # Collect the dependencies instead of including them directly in the diff
             # so we can produce a much smaller direct diff of them.
             if ".deps." not in s:
-                if obj2 is not None:
-                    updates[s] = json.dumps(obj2)
-                else:
-                    updates[s] = None
+                updates[s] = json.dumps(obj2) if obj2 is not None else None
             elif obj2:
                 merge_deps(deps1, obj1)
                 merge_deps(deps2, obj2)

@@ -43,9 +43,8 @@ class It(Iterator[str]):
     def __next__(self) -> str:
         if self.stop:
             raise StopIteration("end")
-        else:
-            self.stop = True
-            return "a"
+        self.stop = True
+        return "a"
 
 
 def other_iterator() -> It:

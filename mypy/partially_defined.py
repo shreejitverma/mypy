@@ -99,7 +99,7 @@ class BranchStatement:
 
     def done(self) -> BranchState:
         branches = [b for b in self.branches if not b.skipped]
-        if len(branches) == 0:
+        if not branches:
             return BranchState(skipped=True)
         if len(branches) == 1:
             return branches[0]

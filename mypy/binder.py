@@ -137,10 +137,14 @@ class ConditionalTypeBinder:
     def _get(self, key: Key, index: int = -1) -> Type | None:
         if index < 0:
             index += len(self.frames)
-        for i in range(index, -1, -1):
-            if key in self.frames[i].types:
-                return self.frames[i].types[key]
-        return None
+        return next(
+            (
+                self.frames[i].types[key]
+                for i in range(index, -1, -1)
+                if key in self.frames[i].types
+            ),
+            None,
+        )
 
     def put(self, expr: Expression, typ: Type) -> None:
         if not isinstance(expr, (IndexExpr, MemberExpr, NameExpr)):

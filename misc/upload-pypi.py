@@ -33,15 +33,9 @@ def item_ok_for_pypi(name: str) -> bool:
     if not is_whl_or_tar(name):
         return False
 
-    if name.endswith(".tar.gz"):
-        name = name[:-7]
-    if name.endswith(".whl"):
-        name = name[:-4]
-
-    if name.endswith("wasm32"):
-        return False
-
-    return True
+    name = name.removesuffix(".tar.gz")
+    name = name.removesuffix(".whl")
+    return not name.endswith("wasm32")
 
 
 def get_release_for_tag(tag: str) -> dict[str, Any]:
@@ -82,7 +76,7 @@ def check_sdist(dist: Path, version: str) -> None:
 
         # strip a git hash from our version, if necessary, since that's not present in version.py
         match = re.match(r"(.*\+dev).*$", version)
-        hashless_version = match.group(1) if match else version
+        hashless_version = match[1] if match else version
 
         assert (
             f'"{hashless_version}"' in version_py_contents
@@ -122,9 +116,7 @@ def upload_to_pypi(version: str, dry_run: bool = True) -> None:
     assert re.match(r"v?0\.[0-9]{3}(\+\S+)?$", version)
     if "dev" in version:
         assert dry_run, "Must use --dry-run with dev versions of mypy"
-    if version.startswith("v"):
-        version = version[1:]
-
+    version = version.removeprefix("v")
     target_dir = tempfile.mkdtemp()
     dist = Path(target_dir) / "dist"
     dist.mkdir()

@@ -53,9 +53,8 @@ class FixAnnotate(BaseFix):
     counter = None if not os.getenv("MAXFIXES") else int(os.getenv("MAXFIXES"))
 
     def transform(self, node, results):
-        if FixAnnotate.counter is not None:
-            if FixAnnotate.counter <= 0:
-                return
+        if FixAnnotate.counter is not None and FixAnnotate.counter <= 0:
+            return
         suite = results["suite"]
         children = suite[0].children
 
@@ -89,9 +88,10 @@ class FixAnnotate(BaseFix):
         # Insert '# type: {annot}' comment.
         # For reference, see lib2to3/fixes/fix_tuple_params.py in stdlib.
         if len(children) >= 2 and children[1].type == token.INDENT:
-            children[1].prefix = "{}# type: {}\n{}".format(
-                children[1].value, annot, children[1].prefix
-            )
+            children[
+                1
+            ].prefix = f"{children[1].value}# type: {annot}\n{children[1].prefix}"
+
             children[1].changed()
             if FixAnnotate.counter is not None:
                 FixAnnotate.counter -= 1
@@ -130,26 +130,15 @@ class FixAnnotate(BaseFix):
                 elif child.type == token.NAME and not in_default:
                     if not is_method or not at_start or "staticmethod" in decorators:
                         inferred_type = "Any"
-                    else:
-                        # Always skip the first argument if it's named 'self'.
-                        # Always skip the first argument of a class method.
-                        if child.value == "self" or "classmethod" in decorators:
-                            pass
-                        else:
-                            inferred_type = "Any"
+                    elif child.value != "self" and "classmethod" not in decorators:
+                        inferred_type = "Any"
                 elif child.value == "=":
                     in_default = True
                 elif in_default and child.value != ",":
                     if child.type == token.NUMBER:
-                        if re.match(r"\d+[lL]?$", child.value):
-                            inferred_type = "int"
-                        else:
-                            inferred_type = "float"  # TODO: complex?
+                        inferred_type = "int" if re.match(r"\d+[lL]?$", child.value) else "float"
                     elif child.type == token.STRING:
-                        if child.value.startswith(("u", "U")):
-                            inferred_type = "unicode"
-                        else:
-                            inferred_type = "str"
+                        inferred_type = "unicode" if child.value.startswith(("u", "U")) else "str"
                     elif child.type == token.NAME and child.value in ("True", "False"):
                         inferred_type = "bool"
                 elif child.value == ",":
@@ -185,9 +174,12 @@ class FixAnnotate(BaseFix):
         decorators = results.get("dd") or [results["d"]]
         decs = []
         for d in decorators:
-            for child in d.children:
-                if isinstance(child, Leaf) and child.type == token.NAME:
-                    decs.append(child.value)
+            decs.extend(
+                child.value
+                for child in d.children
+                if isinstance(child, Leaf) and child.type == token.NAME
+            )
+
         return decs
 
     def is_method(self, node):

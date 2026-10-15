@@ -18,7 +18,7 @@ import tempfile
 def parse_commit_title(diff: str) -> str:
     m = re.search("\n    ([^ ].*)", diff)
     assert m is not None, "Could not parse diff"
-    return m.group(1)
+    return m[1]
 
 
 def main() -> None:

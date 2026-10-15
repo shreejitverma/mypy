@@ -52,8 +52,8 @@ class IPCBase:
     def read(self, size: int = 100000) -> bytes:
         """Read bytes from an IPC connection until its empty."""
         bdata = bytearray()
-        if sys.platform == "win32":
-            while True:
+        while True:
+            if sys.platform == "win32":
                 ov, err = _winapi.ReadFile(self.connection, size, overlapped=True)
                 try:
                     if err == _winapi.ERROR_IO_PENDING:
@@ -65,8 +65,7 @@ class IPCBase:
                     ov.cancel()
                     raise
                 _, err = ov.GetOverlappedResult(True)
-                more = ov.getbuffer()
-                if more:
+                if more := ov.getbuffer():
                     bdata.extend(more)
                 if err == 0:
                     # we are done!
@@ -76,12 +75,10 @@ class IPCBase:
                     continue
                 elif err == _winapi.ERROR_OPERATION_ABORTED:
                     raise IPCException("ReadFile operation aborted.")
-        else:
-            while True:
-                more = self.connection.recv(size)
-                if not more:
-                    break
+            elif more := self.connection.recv(size):
                 bdata.extend(more)
+            else:
+                break
         return bytes(bdata)
 
     def write(self, data: bytes) -> None:
@@ -174,9 +171,8 @@ class IPCServer(IPCBase):
 
     def __init__(self, name: str, timeout: float | None = None) -> None:
         if sys.platform == "win32":
-            name = r"\\.\pipe\{}-{}.pipe".format(
-                name, base64.urlsafe_b64encode(os.urandom(6)).decode()
-            )
+            name = f"\.\pipe\{name}-{base64.urlsafe_b64encode(os.urandom(6)).decode()}.pipe"
+
         else:
             name = f"{name}.sock"
         super().__init__(name, timeout)
@@ -264,7 +260,6 @@ class IPCServer(IPCBase):
     def connection_name(self) -> str:
         if sys.platform == "win32":
             return self.name
-        else:
-            name = self.sock.getsockname()
-            assert isinstance(name, str)
-            return name
+        name = self.sock.getsockname()
+        assert isinstance(name, str)
+        return name

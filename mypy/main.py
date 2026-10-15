@@ -95,8 +95,9 @@ def main(
     res, messages, blockers = run_build(sources, options, fscache, t0, stdout, stderr)
 
     if options.non_interactive:
-        missing_pkgs = read_types_packages_to_install(options.cache_dir, after_run=True)
-        if missing_pkgs:
+        if missing_pkgs := read_types_packages_to_install(
+            options.cache_dir, after_run=True
+        ):
             # Install missing type packages and rerun build.
             install_types(formatter, options, after_run=True, non_interactive=True)
             fscache.flush()
@@ -125,8 +126,9 @@ def main(
         stdout.flush()
 
     if options.install_types and not options.non_interactive:
-        result = install_types(formatter, options, after_run=True, non_interactive=False)
-        if result:
+        if result := install_types(
+            formatter, options, after_run=True, non_interactive=False
+        ):
             print()
             print("note: Run mypy again for up-to-date results with installed types")
             code = 2
@@ -140,7 +142,7 @@ def main(
         sys.exit(code)
 
     # HACK: keep res alive so that mypyc won't free it before the hard_exit
-    list([res])
+    [res]
 
 
 def run_build(
@@ -251,14 +253,7 @@ class PythonExecutableInferenceError(Exception):
 
 
 def python_executable_prefix(v: str) -> list[str]:
-    if sys.platform == "win32":
-        # on Windows, all Python executables are named `python`. To handle this, there
-        # is the `py` launcher, which can be passed a version e.g. `py -3.8`, and it will
-        # execute an installed Python 3.8 interpreter. See also:
-        # https://docs.python.org/3/using/windows.html#python-launcher-for-windows
-        return ["py", f"-{v}"]
-    else:
-        return [f"python{v}"]
+    return ["py", f"-{v}"] if sys.platform == "win32" else [f"python{v}"]
 
 
 def _python_executable_from_version(python_version: tuple[int, int]) -> str:
@@ -266,19 +261,19 @@ def _python_executable_from_version(python_version: tuple[int, int]) -> str:
         return sys.executable
     str_ver = ".".join(map(str, python_version))
     try:
-        sys_exe = (
+        return (
             subprocess.check_output(
-                python_executable_prefix(str_ver) + ["-c", "import sys; print(sys.executable)"],
+                python_executable_prefix(str_ver)
+                + ["-c", "import sys; print(sys.executable)"],
                 stderr=subprocess.STDOUT,
             )
             .decode()
             .strip()
         )
-        return sys_exe
+
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         raise PythonExecutableInferenceError(
-            "failed to find a Python executable matching version {},"
-            " perhaps try --python-executable, or --no-site-packages?".format(python_version)
+            f"failed to find a Python executable matching version {python_version}, perhaps try --python-executable, or --no-site-packages?"
         ) from e
 
 
@@ -296,9 +291,12 @@ def infer_python_executable(options: Options, special_opts: argparse.Namespace) 
     # (unless no_executable is set)
     python_executable = special_opts.python_executable or options.python_executable
 
-    if python_executable is None:
-        if not special_opts.no_executable and not options.no_site_packages:
-            python_executable = _python_executable_from_version(options.python_version)
+    if (
+        python_executable is None
+        and not special_opts.no_executable
+        and not options.no_site_packages
+    ):
+        python_executable = _python_executable_from_version(options.python_version)
     options.python_executable = python_executable
 
 
@@ -515,10 +513,12 @@ def process_options(
         "-V",
         "--version",
         action=CapturableVersionAction,
-        version="%(prog)s " + __version__ + f" (compiled: {compilation_status})",
+        version=f"%(prog)s {__version__}"
+        + f" (compiled: {compilation_status})",
         help="Show program's version number and exit",
         stdout=stdout,
     )
+
 
     config_group = parser.add_argument_group(
         title="Config file",
@@ -1437,12 +1437,14 @@ def process_cache_map(
             parser.error(f"Invalid --cache-map source {source} (triple[0] must be *.py[i])")
         if not meta_file.endswith(".meta.json"):
             parser.error(
-                "Invalid --cache-map meta_file %s (triple[1] must be *.meta.json)" % meta_file
+                f"Invalid --cache-map meta_file {meta_file} (triple[1] must be *.meta.json)"
             )
+
         if not data_file.endswith(".data.json"):
             parser.error(
-                "Invalid --cache-map data_file %s (triple[2] must be *.data.json)" % data_file
+                f"Invalid --cache-map data_file {data_file} (triple[2] must be *.data.json)"
             )
+
         options.cache_map[source] = (meta_file, data_file)
 
 

@@ -9,12 +9,11 @@ from mypy.util import split_module_names
 
 def extract_module_names(type_name: str | None) -> list[str]:
     """Returns the module names of a fully qualified type name."""
-    if type_name is not None:
-        # Discard the first one, which is just the qualified name of the type
-        possible_module_names = split_module_names(type_name)
-        return possible_module_names[1:]
-    else:
+    if type_name is None:
         return []
+    # Discard the first one, which is just the qualified name of the type
+    possible_module_names = split_module_names(type_name)
+    return possible_module_names[1:]
 
 
 class TypeIndirectionVisitor(TypeVisitor[Set[str]]):

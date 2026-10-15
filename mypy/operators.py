@@ -1,5 +1,6 @@
 """Information about Python operators"""
 
+
 from __future__ import annotations
 
 from typing_extensions import Final
@@ -50,7 +51,10 @@ ops_with_inplace_method: Final = {
     ">>",
 }
 
-inplace_operator_methods: Final = {"__i" + op_methods[op][2:] for op in ops_with_inplace_method}
+inplace_operator_methods: Final = {
+    f"__i{op_methods[op][2:]}" for op in ops_with_inplace_method
+}
+
 
 reverse_op_methods: Final = {
     "__add__": "__radd__",
